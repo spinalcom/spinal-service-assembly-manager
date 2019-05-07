@@ -1,0 +1,21 @@
+{
+  "name": "spinal-service-assembly-manager",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/index.js",
+  "types": "declaration/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "Spinalcom",
+  "devDependencies": {
+    "@types/forge-viewer": "^6.4.1",
+    "@types/three": "^0.103.2",
+    "typescript": "^3.4.5"
+  },
+  "dependencies": {
+    "spinal-env-viewer-graph-service": "git+https://github.com/spinalcom/Spinal-Graph-Service.git"
+  }
+}
