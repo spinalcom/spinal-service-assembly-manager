@@ -5,11 +5,16 @@ import {
   SpinalNode
 } from "spinal-env-viewer-graph-service";
 import {
+  BIM_OBJECT_RELATION_NAME, BIM_OBJECT_RELATION_TYPE,
   CONTEXT_NAME, FAMILY_RELATION_NAME,
-  PART_RELATION_NAME,
+  PART_RELATION_NAME, REFERENCE_OBJECT_RELATION_NAME,
   TRANSFORMATION_RELATION_NAME
 } from "./Constants";
+import ModelsManagerService
+  from "../../spinal-service-models-manager/dist";
+import { ModelMetaData } from "../../spinal-service-models-manager/declarations";
 
+import * as debounce from 'debounce';
 
 export class AssemblyManagerService {
 
@@ -17,26 +22,105 @@ export class AssemblyManagerService {
   public contextId: string;
   public static mapNodeIdByModelId: Map<number, string> = new Map();
   public static mapModelByPartId: Map<string, Autodesk.Viewing.Model> = new Map();
+  public initialized: Promise<boolean> = false;
+  public static init: any = false;
+  public modelManager: ModelsManagerService;
 
   constructor() {
-    this.context = SpinalGraphService.getContext(CONTEXT_NAME);
-    this.setContextId();
+    this.initialized = this.init();
+    this.modelManager = ModelsManagerService;
+    this.modelManager.waitForInitialize()
+      .then(() => {
+        this.modelManager.on('rotate', (e) => {
+          this.onRotation(e);
+        });
+        this.modelManager.on('translate', (e) => {
+          this.onTranslate(e);
+        });
+        this.isInitialized().then(()=> {
+          this.autoLoadPart();
+        })
+      });
+  }
+
+  isInitialized(): Promise<boolean> {
+    return this.initialized;
   }
 
   /**
    * set the contextId from the context if defined create the context otherwise
    */
-  setContextId(): void {
-    if (!this.context) {
-      SpinalGraphService.addContext(CONTEXT_NAME).then(context => {
-        this.context = context;
-        this.contextId = context.info.id.get()
-      })
-    } else {
-      this.contextId = this.context.info.id.get()
-    }
+  init(): Promise<boolean> {
+    return SpinalGraphService.waitForInitialization()
+      .then(() => {
+        this.context = SpinalGraphService.getContext(CONTEXT_NAME);
+        if (!this.context) {
+          return SpinalGraphService.addContext(CONTEXT_NAME)
+            .then(context => {
+              this.context = context;
+              this.contextId = context.info.id.get();
+              return true;
+            })
+        } else {
+          this.contextId = this.context.info.id.get();
+          return true;
+        }
+      });
   }
 
+  onTranslate(modelId) {
+    const model = this.modelManager.modelsMetas[modelId];
+    this.setTranslate(model.partId, model.getTranslation());
+  }
+
+  onRotation(modelId) {
+    const model = this.modelManager.modelsMetas[modelId];
+    this.setRotation(model.partId, model.getRotation());
+  }
+
+
+  autoLoadPart(): Promise<any> {
+    if (this.contextId)
+      return SpinalGraphService.getChildren(this.contextId, [FAMILY_RELATION_NAME])
+        .then(families => {
+          const autoLoadingFamilies = [];
+          const autoLoadingPart = [];
+          for (let i = 0; i < families.length; i++) {
+            if (families[i].autoLoad)
+
+              autoLoadingFamilies.push(families[i].id.get())
+          }
+          for (let i = 0; i < autoLoadingFamilies.length; i++) {
+            autoLoadingPart.push(this.getParts(autoLoadingFamilies[i]));
+          }
+          return Promise.all(autoLoadingPart);
+        })
+        .then(parts => {
+          const proms = [];
+          for (let i = 0; i < parts.length; i++) {
+            for (let j = 0; j < parts[i].length; j++) {
+              if (
+                parts[i][j].autoLoad.get()
+                && !parts[i][j].loaded
+              ) {
+                const part  = parts[i][j];
+                part.loaded = true;
+                proms.push(this.loadPart(part));
+              }
+            }
+          }
+          //wait for the model to be loaded before returning
+          return Promise.all(proms)
+            .then((res) => {
+              return res;
+            }).catch(e => {
+              console.error(e);
+            });
+        })
+        .catch(e => {console.error(e)})
+        ;
+    return Promise.resolve();
+  }
 
   /**
    * Return the family with the given name
@@ -44,6 +128,10 @@ export class AssemblyManagerService {
    * @return Promise<any>
    */
   getFamily(familyName: string): Promise<any> {
+    if (!this.contextId) {
+      this.context = SpinalGraphService.getContext(CONTEXT_NAME);
+      this.contextId = this.context.info.id.get();
+    }
     //TODO export interface from Spinal Graph Service
     return SpinalGraphService.getChildren(this.contextId, [FAMILY_RELATION_NAME])
       .then(children => {
@@ -72,7 +160,10 @@ export class AssemblyManagerService {
 
         }
 
-        const familyId = SpinalGraphService.createNode({name: familyName}, undefined);
+        const familyId = SpinalGraphService.createNode({
+          name: familyName,
+          autoLoad: false
+        }, undefined);
 
         return SpinalGraphService
           .addChildInContext(this.contextId, familyId, this.contextId,
@@ -85,31 +176,38 @@ export class AssemblyManagerService {
    * Create a assembly part from a model
    * @param modelName
    * @param model
+   * @param thumbnail
    */
-  createPart(modelName: string, model: Autodesk.Viewing.Model) {
-    this.getFamily(modelName)
+  createPart(modelName: string, model: Autodesk.Viewing.Model, thumbnail: string) {
+    return this.getFamily(modelName)
       .then(family => {
         if (family) {
           const nodeId = SpinalGraphService.createNode(
             {
               name: modelName,
               urn: model.getData().urn,
-              type: 'AssemblyPart'
+              type: 'AssemblyPart',
+              familyId: family.id.get(),
+              autoLoad: false,
+              thumbnail
             },
             undefined
           );
-          SpinalGraphService.addChildInContext(family.id.get(), nodeId, this.contextId,
+
+          return SpinalGraphService.addChildInContext(family.id.get(), nodeId, this.contextId,
             PART_RELATION_NAME, SPINAL_RELATION_LST_PTR_TYPE)
-            .then(() => {
+            .then((node) => {
               // @ts-ignore
               AssemblyManagerService.mapNodeIdByModelId.set(model.id, nodeId);
               AssemblyManagerService.mapModelByPartId.set(nodeId, model);
+              this.modelManager.setPartId(nodeId, model.id);
               SpinalGraphService.getNode(nodeId).model = model;
+              return nodeId;
             });
         } else
-          this.createFamily(modelName)
+          return this.createFamily(modelName)
             .then(() => {
-              this.createPart(modelName, model)
+              this.createPart(modelName, model, thumbnail)
             })
       })
   }
@@ -120,13 +218,20 @@ export class AssemblyManagerService {
    */
   loadPart(node: { [key: string]: any, urn: string }) {
     // @ts-ignore
-    return window.spinal.ForgeViewer.loadPart(node)
-      .then(model => {
-        AssemblyManagerService.mapNodeIdByModelId.set(model.id, node.id.get());
+    return this.modelManager.loadModel(node.urn.get(), node.id.get())
+      .then((model: ModelMetaData) => {
+        AssemblyManagerService.mapNodeIdByModelId.set(model.modelId, node.id.get());
         AssemblyManagerService.mapModelByPartId.set(node.id.get(), model);
-        node.modelId = model.id;
-        return node.id.get()
-      });
+        node.modelId = model.modelId;
+        return this.getTransformation(node.id.get())
+          .then(transformation => {
+            if (transformation) {
+              this.modelManager.transformModel(model.modelId, transformation.transform);
+            }
+
+            return node.id.get()
+          });
+      }).catch(console.error);
   }
 
   /**
@@ -142,83 +247,84 @@ export class AssemblyManagerService {
    * @param dbid
    * @param model
    */
-  createBimObj(dbid: number, model: Autodesk.Viewing.Model) : Promise<SpinalNode> {
+  createBimObj(dbid: number, name: string, model: Autodesk.Viewing.Model): Promise<SpinalNode> {
     return this.getBimObjectFromViewer(dbid, model)
       .then(bimObj => {
 
-        if (bimObj)//bimObject already exist
-          return;
 
-        // @ts-ignore
-        const partId = this.getPart(model.id);
+          if (bimObj && bimObj.length > 0) {  //bimObject already exist
+            return;
+          }
 
-        //TODO use external id instead
-        const bimId = SpinalGraphService.createNode(
-          {
-            name: 'bimObject',
-            dbId: dbid
-          },
-          undefined);
+          // @ts-ignore
+          const partId = this.getPart(model.id);
 
-        return  SpinalGraphService.addChildInContext(partId, bimId, this.contextId,
-          'hasBIMObjects', SPINAL_RELATION_LST_PTR_TYPE);
-      });
-   }
+          //TODO use external id instead
+          const bimId = SpinalGraphService.createNode(
+            {
+              name: name,
+              dbId: dbid,
+              type: 'BIMObject'
+            },
+            undefined);
+          return SpinalGraphService.addChildInContext(partId, bimId, this.contextId,
+            BIM_OBJECT_RELATION_NAME, SPINAL_RELATION_LST_PTR_TYPE);
+        }
+      ).catch(e => {
+        console.error(e);
+      })
+      ;
+  }
 
   /**
-   * Return the bimobject associated to the dbid and model 
+   * Return the bimobject associated to the dbid and model
    * @param dbId {number}
    * @param model {Autodesk.Viewing.Model}
    */
-  getBimObjectFromViewer( dbId :number, model: Autodesk.Viewing.Model ) : Promise<any> {
+  getBimObjectFromViewer(dbId: number, model: Autodesk.Viewing.Model): Promise<any> {
     // @ts-ignore
-    const partId = this.getPart( model.id );
-    return SpinalGraphService.getChildren( partId, ['hasBIMObjects'] )
-      .then( children => {
+    const partId = this.getPart(model.id);
+    return SpinalGraphService.getChildren(partId, [BIM_OBJECT_RELATION_NAME])
+      .then(children => {
         for (let i = 0; i < children.length; i++) {
           // @ts-ignore
-          if (children.dbid.get() === dbId)
-            return children;
+          if (children[i].dbId.get() === dbId) {
+            return children[i];
+          }
         }
-        return undefined;
-      } )
+        return Promise.resolve(undefined);
+      })
+  }
+
+  setAutoLoad(partId, autoload) {
+    SpinalGraphService.getNodeAsync(partId)
+      .then(part => {
+        SpinalGraphService.modifyNode(partId, {autoLoad: autoload});
+        SpinalGraphService.modifyNode(part.familyId, {autoLoad: autoload})
+      })
+
   }
 
   /**
    * Get all the part of a family
    * @param familyId {string}
    */
-  getParts( familyId ) : Promise<any[]>{
-    return SpinalGraphService.getChildren( familyId, [PART_RELATION_NAME] )
+  getParts(familyId): Promise<any[]> {
+    return SpinalGraphService.getChildren(familyId, [PART_RELATION_NAME])
   }
 
-
-  /**
-   * Get the transformation id associated to the part
-   * @param partId {string}
-   * @return {PromiseLike<string>}
-   */
-  getTransformId( partId : string ) : Promise<string> {
-    return SpinalGraphService.getChildren( partId, [TRANSFORMATION_RELATION_NAME] )
-      .then( children => {
-        if (children.length > 0) {
-          return children[0].id.get();
-        }
-        return null;
-      } );
-  }
 
   /**
    * Get the transformation associated to the part
    * @param partId {string}
    * @return {PromiseLike<string>}
    */
-  getTransformation( partId : string ) : Promise<any> {
-    return SpinalGraphService.getChildren( partId, [TRANSFORMATION_RELATION_NAME] )
-      .then( children => {
+  getTransformation(partId: string): Promise<any> {
+    return SpinalGraphService.getChildren(partId, [TRANSFORMATION_RELATION_NAME])
+      .then(children => {
         if (children.length > 0)
           return children[0];
-      } )
+      })
   }
 
   /**
@@ -226,15 +332,15 @@ export class AssemblyManagerService {
    * @param partId {string}
    * @param transformation
    */
-  createTransformation( partId : string, transformation:any ): Promise<SpinalNode> {
+  createTransformation(partId: string, transformation: any): Promise<SpinalNode> {
     const transformationId = SpinalGraphService
-      .createNode( {
+      .createNode({
         type: 'transformation',
         partId: partId,
         transform: transformation
-      } , undefined);
+      }, undefined);
     return SpinalGraphService
-      .addChild( partId, transformationId, TRANSFORMATION_RELATION_NAME, SPINAL_RELATION_LST_PTR_TYPE );
+      .addChild(partId, transformationId, TRANSFORMATION_RELATION_NAME, SPINAL_RELATION_LST_PTR_TYPE);
   }
 
   /**
@@ -243,28 +349,54 @@ export class AssemblyManagerService {
    * @param transform
    */
   //TODO create transformation model
-  setTransform( partId : string, transform: any ) {
-    this.getTransformId( partId )
-      .then( transformId => {
+  setTransform(partId: string, transform: any) {
+    this.getTransformation(partId)
+      .then(transformation => {
         // @ts-ignore //TODO improve SpinalNodeRef Interface
-        SpinalGraphService.modifyNode( transformId, { transform: transform } );
-      } )
+        SpinalGraphService.modifyNode(transformation.id.get(), {transform: transform});
+      })
+  }
+
+  setTranslate(partId, translation) {
+    return this.getTransformation(partId)
+      .then(transformation => {
+        if (!transformation) {
+          this.createTransformation(partId, {translate: translation});
+        } else {
+          const transform = transformation.transform.get();
+          transform.translate = translation;
+          this.setTransform(partId, transform);
+        }
+      })
+  }
+
+  setRotation(partId, rotation) {
+    return this.getTransformation(partId)
+      .then(transformation => {
+        if (!transformation) {
+          this.createTransformation(partId, {rotate: rotation});
+        } else {
+          const transform = transformation.transform.get();
+          transform.rotate = rotation;
+          this.setTransform(partId, transform);
+        }
+      })
   }
 
   /**
    * Get all BIMObject associated to a part
    * @param partId
    */
-  getBimObjects( partId: string ) : Promise<any>{
-    return SpinalGraphService.getChildren( partId, ['hasBIMObjects'] )
+  getBimObjects(partId: string): Promise<any> {
+    return SpinalGraphService.getChildren(partId, [BIM_OBJECT_RELATION_NAME])
   }
 
   /**
    * Return the model associated to the part
    * @param partId
    */
-  getModel( partId ) {
-    return AssemblyManagerService.mapModelByPartId.get( partId )
+  getModel(partId) {
+    return AssemblyManagerService.mapModelByPartId.get(partId)
   }
 
   /**
@@ -272,81 +404,56 @@ export class AssemblyManagerService {
    * @param partId
    * @param transform
    */
-  async setTransformation( partId: string, transform: any ) {
-    transform = this.normalize( transform );
+  async setTransformation(partId: string, transform: any) {
 
-    const nodeId :string  = await this.getTransformId( partId );
+    const node: string = await this.getTransformation(partId);
+
 
     //Create a new transformation if none exist
-    if (!nodeId) {
-      await this.createTransformation( partId, transform );
+    if (!node) {
+      await this.createTransformation(partId, transform);
       return;
     }
 
-    const node = SpinalGraphService.getNode( nodeId );
 
     const transformation = {};
 
-    const keys = ['translate',  'rotate','scale'];
-    for (let i = 0; i< keys.length; i++) {
-      if (node.transform && node.transform.hasOwnProperty( keys[i] ))
+    const keys = ['translate', 'rotate', 'scale'];
+    for (let i = 0; i < keys.length; i++) {
+      if (node.transform && node.transform.hasOwnProperty(keys[i]))
         transformation[keys[i]] = node.transform[keys[i]].get();
-      if (transform.hasOwnProperty( keys[i] ))
+      if (transform.hasOwnProperty(keys[i]))
         transformation[keys[i]] = transform[keys[i]]
     }
 
     // @ts-ignore
-    SpinalGraphService.modifyNode( nodeId, {
+    SpinalGraphService.modifyNode(nodeId, {
       transform: transformation
-    } )
+    })
   }
 
-  /**
-   * transform a three transformation to a spinal object
-   * @param transformation
-   */
-  normalize( transformation: any ) {
-    const res = {};
-    const keys = ['translate', 'rotate', 'scale'];
-    for (let i = 0; i < keys.length; i++) {
-      if (transformation.hasOwnProperty( keys[i] )) {
-        res[keys[i]] = this._normalize(keys[i], transformation[keys[i]] )
-      }
-    }
-    return res;
+
+  _getCurrentPartId() {
+    return this.getPart(window.spinal.ForgeViewer.viewer.model.id);
   }
 
-  _normalize(name, obj){
-    if (name === 'rotate')
-      return this._euler2deg(obj);
-    if (name === 'translate')
-      return  this._vector3ToMap(obj);
-    if (name === 'scale')
-      return  this._vector3ToMap(obj);
+  static _getCurrentModel() {
+    return window.spinal.ForgeViewer.viewer.model;
   }
 
-  _euler2deg(euler){
-    if (euler.rad){
-      const res = {x: 0, y:0, z:0};
-      res.x = this._rad2Deg(euler.x);
-      res.y = this._rad2Deg(euler.y);
-      res.z = this._rad2Deg(euler.z);
-      return res;
-    }
-    return euler;
+  static _getViewer() {
+    return window.spinal.ForgeViewer.viewer;
   }
 
-  _rad2Deg(nb){
-    return nb / (Math.PI / 180);
+  static _setCurrentModel(model: Autodesk.Viewing.Model) {
+    return new Promise(resolve => {
+      AssemblyManagerService._getViewer().model = model;
+      var propertyPanel = AssemblyManagerService._getViewer().getPropertyPanel(true);
+      propertyPanel.currentModel = model;
+      model.getObjectTree(instanceTree => {
+        AssemblyManagerService._getViewer().modelstructure.setModel(instanceTree);
+        resolve();
+      });
+    });
   }
-
-  _vector3ToMap(vec ) {
-    const res = {};
-
-    for (let key in vec) {
-      if (vec.hasOwnProperty( key ))
-        res[key] = vec[key];
-    }
-    return res;
-  }
-} 
+}
