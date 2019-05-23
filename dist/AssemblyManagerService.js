@@ -368,15 +368,15 @@ class AssemblyManagerService {
     _getCurrentPartId() {
         return this.getPart(window.spinal.ForgeViewer.viewer.model.id);
     }
-    static _getCurrentModel() {
+    _getCurrentModel() {
         return window.spinal.ForgeViewer.viewer.model;
     }
-    static _getViewer() {
+    _getViewer() {
         return window.spinal.ForgeViewer.viewer;
     }
-    static _setCurrentModel(model) {
+    _setCurrentModel(model) {
         return new Promise(resolve => {
-            AssemblyManagerService._getViewer().model = model;
+            AssemblyManagerService._getViewer().impl.model = model;
             var propertyPanel = AssemblyManagerService._getViewer().getPropertyPanel(true);
             propertyPanel.currentModel = model;
             model.getObjectTree(instanceTree => {
