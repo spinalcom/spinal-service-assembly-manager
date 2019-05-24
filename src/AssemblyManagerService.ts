@@ -15,6 +15,7 @@ import ModelsManagerService
 import { ModelMetaData } from "../../spinal-service-models-manager/declarations";
 
 import * as debounce from 'debounce';
+const BIM_OBJECT_RELATION_NAME = "hasBIMObject";
 
 export class AssemblyManagerService {
 
@@ -239,7 +240,7 @@ export class AssemblyManagerService {
    * @param modelId {number}
    */
   getPart(modelId: number) {
-    return AssemblyManagerService.mapNodeIdByModelId.get(modelId);
+    return this.modelManager.getPartId(modelId);
   }
 
   /**
@@ -263,7 +264,7 @@ export class AssemblyManagerService {
           const bimId = SpinalGraphService.createNode(
             {
               name: name,
-              dbId: dbid,
+              dbid: dbid,
               type: 'BIMObject'
             },
             undefined);
@@ -282,13 +283,14 @@ export class AssemblyManagerService {
    * @param model {Autodesk.Viewing.Model}
    */
   getBimObjectFromViewer(dbId: number, model: Autodesk.Viewing.Model): Promise<any> {
+    console.log(AssemblyManagerService);
     // @ts-ignore
     const partId = this.getPart(model.id);
     return SpinalGraphService.getChildren(partId, [BIM_OBJECT_RELATION_NAME])
       .then(children => {
         for (let i = 0; i < children.length; i++) {
           // @ts-ignore
-          if (children[i].dbId.get() === dbId) {
+          if (children[i].dbid.get() === dbId) {
             return children[i];
           }
         }

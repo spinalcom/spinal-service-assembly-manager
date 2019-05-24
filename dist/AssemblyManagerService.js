@@ -11,6 +11,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const spinal_env_viewer_graph_service_1 = require("spinal-env-viewer-graph-service");
 const Constants_1 = require("./Constants");
 const dist_1 = require("../../spinal-service-models-manager/dist");
+const BIM_OBJECT_RELATION_NAME = "hasBIMObject";
 class AssemblyManagerService {
     constructor() {
         this.initialized = false;
@@ -199,7 +200,7 @@ class AssemblyManagerService {
      * @param modelId {number}
      */
     getPart(modelId) {
-        return AssemblyManagerService.mapNodeIdByModelId.get(modelId);
+        return this.modelManager.getPartId(modelId);
     }
     /**
      * Create a new BIM obj from ad db id and a model
@@ -217,10 +218,10 @@ class AssemblyManagerService {
             //TODO use external id instead
             const bimId = spinal_env_viewer_graph_service_1.SpinalGraphService.createNode({
                 name: name,
-                dbId: dbid,
+                dbid: dbid,
                 type: 'BIMObject'
             }, undefined);
-            return spinal_env_viewer_graph_service_1.SpinalGraphService.addChildInContext(partId, bimId, this.contextId, Constants_1.BIM_OBJECT_RELATION_NAME, spinal_env_viewer_graph_service_1.SPINAL_RELATION_LST_PTR_TYPE);
+            return spinal_env_viewer_graph_service_1.SpinalGraphService.addChildInContext(partId, bimId, this.contextId, BIM_OBJECT_RELATION_NAME, spinal_env_viewer_graph_service_1.SPINAL_RELATION_LST_PTR_TYPE);
         }).catch(e => {
             console.error(e);
         });
@@ -231,13 +232,14 @@ class AssemblyManagerService {
      * @param model {Autodesk.Viewing.Model}
      */
     getBimObjectFromViewer(dbId, model) {
+        console.log(AssemblyManagerService);
         // @ts-ignore
         const partId = this.getPart(model.id);
-        return spinal_env_viewer_graph_service_1.SpinalGraphService.getChildren(partId, [Constants_1.BIM_OBJECT_RELATION_NAME])
+        return spinal_env_viewer_graph_service_1.SpinalGraphService.getChildren(partId, [BIM_OBJECT_RELATION_NAME])
             .then(children => {
             for (let i = 0; i < children.length; i++) {
                 // @ts-ignore
-                if (children[i].dbId.get() === dbId) {
+                if (children[i].dbid.get() === dbId) {
                     return children[i];
                 }
             }
@@ -329,7 +331,7 @@ class AssemblyManagerService {
      * @param partId
      */
     getBimObjects(partId) {
-        return spinal_env_viewer_graph_service_1.SpinalGraphService.getChildren(partId, [Constants_1.BIM_OBJECT_RELATION_NAME]);
+        return spinal_env_viewer_graph_service_1.SpinalGraphService.getChildren(partId, [BIM_OBJECT_RELATION_NAME]);
     }
     /**
      * Return the model associated to the part
