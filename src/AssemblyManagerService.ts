@@ -283,7 +283,6 @@ export class AssemblyManagerService {
    * @param model {Autodesk.Viewing.Model}
    */
   getBimObjectFromViewer(dbId: number, model: Autodesk.Viewing.Model): Promise<any> {
-    console.log(AssemblyManagerService);
     // @ts-ignore
     const partId = this.getPart(model.id);
     return SpinalGraphService.getChildren(partId, [BIM_OBJECT_RELATION_NAME])
